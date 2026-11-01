@@ -1,0 +1,33 @@
+// 2026-10-28 Codex：外部来源只表示用户接受，不表示 CLI 已完成。
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { mkdtempSync,writeFileSync,readFileSync,rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { openStore,saveContent,saveMaterialVersion } from '../src/storage.mjs';
+import { prepareExternalBodyPreference,readVerifiedPreference } from '../src/preference.mjs';
+const sha=x=>createHash('sha256').update(x).digest('hex');
+test('外部正文画像准备不发布，核验来源/正文后发布，篡改即拒绝',t=>{
+ const root=mkdtempSync(join(tmpdir(),'external-profile-')),store=openStore(join(root,'db.sqlite'));t.after(()=>{store.close();rmSync(root,{recursive:true,force:true});});
+ const save=(name,value)=>{const p=join(root,name);writeFileSync(p,typeof value==='string'?value:JSON.stringify(value));return p;};
+ const bodyRef=save('body.json',{title:'标题',description:'这是逐字正文证据'});
+ const content=saveContent(store,{platform:'xiaohongshu',content_id:'n',source_state:'available'});
+ const material=saveMaterialVersion(store,{content_id:content.entity_id,body_ref:bodyRef,body_hash:sha(readFileSync(bodyRef)),ordered_images:[],media_kind:'image',completeness:'complete',fetch_status:'succeeded'});
+ const profileRef=save('profile.json',{scope:{images_seen:0},findings:[{theme:'主题',interpretation:'假设',confidence:'高',long_term:false,evidence:[{note_id:'n',quote:'逐字正文',location:'正文'}]}],limitations:['便利样本']});
+ const ledgerRef=save('ledger.jsonl',JSON.stringify({note_id:'n','原文短证据':'正文证据','证据位置':'正文',long_term:false,image_seen:false})+'\n');
+ const acceptanceRef=save('acceptance.json',{kind:'human_acceptance',accepted:true,profile_hash:sha(readFileSync(profileRef)),ledger_hash:sha(readFileSync(ledgerRef)),source:{text:'接受正文阶段画像',recorded_at:'now',chat_ref:'chat'},model_source:{interface:'ChatGPT',model:'GPT-6',observed:'unknown'}});
+ const args={store,root,owner:'o',profileRef,ledgerRef,acceptanceRef,materials:{n:material.entity_id}};
+ const acceptanceBytes=readFileSync(acceptanceRef),ledgerBytes=readFileSync(ledgerRef);
+ writeFileSync(acceptanceRef,JSON.stringify({...JSON.parse(acceptanceBytes),accepted:false}));assert.throws(()=>prepareExternalBodyPreference(args),/acceptance/);writeFileSync(acceptanceRef,acceptanceBytes);
+ writeFileSync(ledgerRef,JSON.stringify({note_id:'n','原文短证据':'不存在的引用','证据位置':'正文',long_term:false,image_seen:false})+'\n');
+ writeFileSync(acceptanceRef,JSON.stringify({...JSON.parse(acceptanceBytes),ledger_hash:sha(readFileSync(ledgerRef))}));assert.throws(()=>prepareExternalBodyPreference(args),/evidence/);writeFileSync(ledgerRef,ledgerBytes);writeFileSync(acceptanceRef,acceptanceBytes);
+ const p=prepareExternalBodyPreference(args),race=prepareExternalBodyPreference(args);
+ const titleLedger={note_id:'n','原文短证据':'标题','证据位置':'标题',long_term:false,image_seen:false};
+ writeFileSync(ledgerRef,JSON.stringify(titleLedger)+'\n');writeFileSync(acceptanceRef,JSON.stringify({...JSON.parse(acceptanceBytes),ledger_hash:sha(readFileSync(ledgerRef))}));assert.doesNotThrow(()=>prepareExternalBodyPreference(args));
+ writeFileSync(ledgerRef,JSON.stringify({...titleLedger,'证据位置':'正文'})+'\n');writeFileSync(acceptanceRef,JSON.stringify({...JSON.parse(acceptanceBytes),ledger_hash:sha(readFileSync(ledgerRef))}));assert.throws(()=>prepareExternalBodyPreference(args),/evidence/);writeFileSync(ledgerRef,ledgerBytes);writeFileSync(acceptanceRef,acceptanceBytes);
+ assert.equal(readVerifiedPreference(store,'o'),null);assert.equal(store.db.prepare('SELECT count(*) n FROM preference_version').get().n,0);
+ p.publish();assert.throws(()=>race.publish(),/parent changed/);const current=readVerifiedPreference(store,'o');assert.equal(current.manifest.kind,'external_accepted_body_profile');assert.deepEqual(current.hypotheses[0].supporting_analysis_ids,['external-body:n']);assert.equal(current.hypotheses[0].long_term,false);
+ writeFileSync(bodyRef,'tampered');assert.equal(readVerifiedPreference(store,'o'),null);writeFileSync(bodyRef,JSON.stringify({title:'标题',description:'这是逐字正文证据'}));
+ writeFileSync(acceptanceRef,'{}');assert.equal(readVerifiedPreference(store,'o'),null);
+});

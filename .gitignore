@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+!.env.example
+XHS/
+.codex/private/
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.log
+*.tmp
+.codex/*results*.json
+__pycache__/

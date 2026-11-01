@@ -1,0 +1,11 @@
+{
+  "dbPath": "C:/redbook-local/state.sqlite",
+  "root": "C:/redbook-local/artifacts",
+  "owner": "local-owner",
+  "appRef": "replace-with-local-app-reference",
+  "targetRef": "replace-with-local-chat-reference",
+  "pageLabel": "p1",
+  "taskSpaceId": 1,
+  "runtimeModule": "C:/redbook-local/runtime.mjs",
+  "productionEnabled": false
+}
